@@ -1,0 +1,40 @@
+services:
+  go-backend:
+    build:
+      context: ./go-backend
+      dockerfile: Dockerfile
+    ports:
+      - "8080:8080"
+    environment:
+      - ENV=development
+      - REDIS_ADDR=redis:6379
+      - PYTHON_BACKEND_URL=http://python-backend:5000
+    depends_on:
+      - redis
+    volumes:
+      - ./go-backend/web:/root/web
+
+  python-backend:
+    build:
+      context: ./python-backend
+      dockerfile: Dockerfile
+    ports:
+      - "5000:5000"
+    environment:
+      - ENV=development
+      - PYTHONUNBUFFERED=1
+      - GO_BACKEND_URL=http://go-backend:8080
+    volumes:
+      - ./python-backend/app:/app
+      - ../traffic-accident-detection-yolo11x:/models
+    depends_on:
+      - redis
+
+  redis:
+    image: redis:7-alpine
+    ports:
+      - "6379:6379"
+
+networks:
+  default:
+    driver: bridge
