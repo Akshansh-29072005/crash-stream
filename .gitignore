@@ -1,0 +1,29 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+.venv/
+venv/
+ENV/
+env/
+.env
+
+# Go
+/go-backend/server
+/go-backend/vendor/
+
+# Models & Large Files
+*.pt
+*.onnx
+/traffic-accident-detection-yolo11x/
+
+# Docker
+.docker/
+
+# OS
+.DS_Store
+Thumbs.db
+
+# IDEs
+.vscode/
+.idea/
