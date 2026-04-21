@@ -1,0 +1,334 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>CrashStream - Accident Detection</title>
+    <style>
+        body {
+            font-family: Arial, sans-serif;
+            margin: 0;
+            padding: 20px;
+            background-color: #f5f5f5;
+        }
+        .container {
+            max-width: 800px;
+            margin: 0 auto;
+            background: white;
+            padding: 20px;
+            border-radius: 8px;
+            box-shadow: 0 2px 10px rgba(0,0,0,0.1);
+        }
+        h1 {
+            text-align: center;
+            color: #333;
+        }
+        #videoContainer {
+            position: relative;
+            width: 100%;
+            height: 0;
+            padding-bottom: 56.25%; /* 16:9 aspect ratio */
+            margin: 20px 0;
+            background: #000;
+            border-radius: 4px;
+            overflow: hidden;
+        }
+        #videoElement {
+            position: absolute;
+            top: 0;
+            left: 0;
+            width: 100%;
+            height: 100%;
+            object-fit: cover;
+        }
+        #canvasElement {
+            position: absolute;
+            top: 0;
+            left: 0;
+            width: 100%;
+            height: 100%;
+        }
+        .btn {
+            display: block;
+            width: 100%;
+            padding: 12px;
+            background-color: #007bff;
+            color: white;
+            border: none;
+            border-radius: 4px;
+            font-size: 16px;
+            cursor: pointer;
+            margin: 10px 0;
+        }
+        .btn:hover {
+            background-color: #0056b3;
+        }
+        .btn:disabled {
+            background-color: #ccc;
+            cursor: not-allowed;
+        }
+        #status {
+            text-align: center;
+            margin: 20px 0;
+            min-height: 24px;
+        }
+        #results {
+            margin-top: 20px;
+            padding: 15px;
+            background-color: #f8f9fa;
+            border-radius: 4px;
+        }
+        .alert {
+            padding: 12px;
+            margin: 10px 0;
+            border-radius: 4px;
+        }
+        .alert-danger {
+            background-color: #f8d7da;
+            color: #721c24;
+            border: 1px solid #f5c6cb;
+        }
+        .alert-success {
+            background-color: #d4edda;
+            color: #155724;
+            border: 1px solid #c3e6cb;
+        }
+        .alert-info {
+            background-color: #d1ecf1;
+            color: #0c5460;
+            border: 1px solid #bee5eb;
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <h1>CrashStream Accident Detection</h1>
+        <div id="status">Initializing...</div>
+        
+        <div id="videoContainer">
+            <video id="videoElement" autoplay playsinline></video>
+            <canvas id="canvasElement" style="display:none;"></canvas>
+        </div>
+        
+        <button class="btn" id="startBtn">Start Camera</button>
+        <button class="btn" id="stopBtn" disabled>Stop Camera</button>
+        
+        <div id="results">
+            <h3>Detection Results:</h3>
+            <div id="detectionOutput">Waiting for detection...</div>
+        </div>
+    </div>
+
+    <script>
+        // Configuration
+        const CONFIG = {
+            STREAM_URL: '/api/stream',
+            GO_BACKEND_WS_URL: `ws://${window.location.host}/ws/alerts`,
+            DETECTION_INTERVAL: 500 // ms between frame captures for detection
+        };
+
+        let videoElement = document.getElementById('videoElement');
+        let canvasElement = document.getElementById('canvasElement');
+        let startBtn = document.getElementById('startBtn');
+        let stopBtn = document.getElementById('stopBtn');
+        let statusEl = document.getElementById('status');
+        let detectionOutput = document.getElementById('detectionOutput');
+        
+        let stream = null;
+        let detectionInterval = null;
+        let ws = null;
+
+        // Initialize WebSocket connection for alerts
+        function initWebSocket() {
+            ws = new WebSocket(CONFIG.GO_BACKEND_WS_URL);
+            
+            ws.onopen = function() {
+                statusEl.textContent = 'Connected to alert server';
+                statusEl.className = 'alert alert-info';
+            };
+            
+            ws.onmessage = function(event) {
+                const data = JSON.parse(event.data);
+                if (data.accident_detected) {
+                    showAlert('Accident Detected!', 'danger', data);
+                }
+            };
+            
+            ws.onerror = function(error) {
+                console.error('WebSocket error:', error);
+                statusEl.textContent = 'WebSocket error';
+                statusEl.className = 'alert alert-danger';
+            };
+            
+            ws.onclose = function() {
+                statusEl.textContent = 'Disconnected from alert server';
+                statusEl.className = 'alert alert-warning';
+            };
+        }
+
+        // Start camera stream
+        async function startCamera() {
+            if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) {
+                statusEl.innerHTML = `
+                    <strong>Security Error:</strong> Your browser blocked camera access.<br>
+                    <small>Browsers only allow camera access on <b>localhost</b> or <b>HTTPS</b>. Using an IP address disables this feature.</small>
+                `;
+                statusEl.className = 'alert alert-danger';
+                return;
+            }
+            try {
+                stream = await navigator.mediaDevices.getUserMedia({ 
+                    video: { facingMode: 'environment' } 
+                });
+                videoElement.srcObject = stream;
+                
+                statusEl.textContent = 'Camera started - detecting...';
+                statusEl.className = 'alert alert-info';
+                
+                startBtn.disabled = true;
+                stopBtn.disabled = false;
+                
+                // Start periodic detection
+                detectionInterval = setInterval(captureAndDetect, CONFIG.DETECTION_INTERVAL);
+                
+                // Initialize WebSocket
+                initWebSocket();
+            } catch (err) {
+                console.error('Error accessing camera:', err);
+                statusEl.innerHTML = `
+                    <strong>Camera Error:</strong> ${err.message}<br>
+                    <small>Note: Mobile browsers require HTTPS or 'localhost' for camera access.</small>
+                `;
+                statusEl.className = 'alert alert-danger';
+            }
+        }
+
+        // Stop camera stream
+        function stopCamera() {
+            if (stream) {
+                stream.getTracks().forEach(track => track.stop());
+                videoElement.srcObject = null;
+            }
+            
+            if (detectionInterval) {
+                clearInterval(detectionInterval);
+                detectionInterval = null;
+            }
+            
+            if (ws) {
+                ws.close();
+                ws = null;
+            }
+            
+            statusEl.textContent = 'Camera stopped';
+            statusEl.className = 'alert alert-info';
+            
+            startBtn.disabled = false;
+            stopBtn.disabled = true;
+            
+            detectionOutput.textContent = 'Detection stopped';
+        }
+
+        // Capture frame and send to detection backend
+        async function captureAndDetect() {
+            if (!videoElement.readyState === videoElement.HAVE_ENOUGH_DATA) {
+                return;
+            }
+            
+            // Draw video frame to canvas
+            const ctx = canvasElement.getContext('2d');
+            canvasElement.width = videoElement.videoWidth;
+            canvasElement.height = videoElement.videoHeight;
+            ctx.drawImage(videoElement, 0, 0, canvasElement.width, canvasElement.height);
+            
+            // Convert canvas to blob
+            canvasElement.toBlob(async (blob) => {
+                if (!blob) return;
+                
+                try {
+                    const formData = new FormData();
+                    formData.append('file', blob, 'frame.jpg');
+                    
+                    const response = await fetch(CONFIG.STREAM_URL, {
+                        method: 'POST',
+                        body: formData
+                    });
+                    
+                    if (!response.ok) {
+                        throw new Error(`HTTP error! status: ${response.status}`);
+                    }
+                    
+                    const result = await response.json();
+                    handleDetectionResult(result);
+                } catch (error) {
+                    console.error('Detection error:', error);
+                    detectionOutput.textContent = 'Detection error: ' + error.message;
+                }
+            }, 'image/jpeg', 0.8); // Quality 0.8 for faster transmission
+        }
+
+        // Handle detection results
+        function handleDetectionResult(result) {
+            // Clear previous boxes if needed (the periodic capture clears the ctx usually)
+            const ctx = canvasElement.getContext('2d');
+            
+            if (result.accident_detected) {
+                detectionOutput.innerHTML = `
+                    <div class="alert alert-danger">
+                        <strong>ACCIDENT DETECTED!</strong><br>
+                        Confidence: ${(result.confidence * 100).toFixed(2)}%<br>
+                        Timestamp: ${result.timestamp}
+                    </div>
+                `;
+                
+                // Draw bounding box if provided
+                if (result.bbox) {
+                    canvasElement.style.display = 'block';
+                    const [x1, y1, x2, y2] = result.bbox;
+                    ctx.strokeStyle = '#ff0000';
+                    ctx.lineWidth = 4;
+                    ctx.strokeRect(x1, y1, x2 - x1, y2 - y1);
+                    
+                    // Add label
+                    ctx.fillStyle = '#ff0000';
+                    ctx.font = '16px Arial';
+                    ctx.fillText(`Accident: ${(result.confidence * 100).toFixed(0)}%`, x1, y1 > 20 ? y1 - 10 : y1 + 20);
+                }
+            } else {
+                canvasElement.style.display = 'none';
+                detectionOutput.innerHTML = `
+                    <div class="alert alert-success">
+                        No accident detected<br>
+                        Confidence: ${(result.confidence * 100).toFixed(2)}%
+                    </div>
+                `;
+            }
+        }
+
+        // Show alert from WebSocket
+        function showAlert(message, type, data) {
+            const alertDiv = document.createElement('div');
+            alertDiv.className = `alert alert-${type}`;
+            alertDiv.innerHTML = `<strong>${message}</strong><br>${JSON.stringify(data)}`;
+            
+            // Insert at the top of results container
+            const resultsContainer = document.getElementById('results');
+            resultsContainer.insertBefore(alertDiv, resultsContainer.firstChild);
+            
+            // Remove alert after 5 seconds
+            setTimeout(() => {
+                alertDiv.remove();
+            }, 5000);
+        }
+
+        // Event listeners
+        startBtn.addEventListener('click', startCamera);
+        stopBtn.addEventListener('click', stopCamera);
+
+        // Handle page unload
+        window.addEventListener('beforeunload', () => {
+            stopCamera();
+        });
+    </script>
+</body>
+</html>
