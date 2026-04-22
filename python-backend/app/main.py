@@ -65,7 +65,7 @@ async def detect_accidents(file: UploadFile = File(...)):
 
     # Perform inference
     # YOLO returns a list of Results objects
-    results = model(image, conf=0.15)
+    results = model(image, conf=0.65)
     
     detection_occurred = False
     max_conf = 0.0
